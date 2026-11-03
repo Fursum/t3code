@@ -21,9 +21,14 @@ export const copilotClientCapabilitiesMeta = {
       "subagent.failed",
       "assistant.message_delta",
       "assistant.reasoning_delta",
+      "assistant.usage",
+      "session.auto_mode_resolved",
     ],
   },
 };
+
+// 1e9 nano-AIU make 1 AI credit, and 100 AI credits make 1 USD.
+const USD_PER_NANO_AIU = 1 / 1e11;
 
 const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
 
@@ -58,6 +63,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+const tokens = (value: unknown) => (typeof value === "number" ? value : 0);
+
 const childSessionId = (taskToolCallId: string) => `copilot-task:${taskToolCallId}`;
 
 interface CopilotSessionAttribution {
@@ -86,6 +93,34 @@ export function makeCopilotSubagentRouting() {
       const data = event.data ?? {};
       const task = typeof data.parentToolCallId === "string" ? data.parentToolCallId : undefined;
       switch (event.type) {
+        // Arrives before the first model call, so the user can stop a turn and pick another model.
+        case "session.auto_mode_resolved": {
+          if (event.agentId !== undefined || typeof data.chosenModel !== "string") {
+            return Effect.void;
+          }
+          return context.reportTurnNotice({
+            sessionId: event.sessionId,
+            title: `Auto routed to ${data.chosenModel}`,
+          });
+        }
+        // PromptResponse.usage accumulates across the session, so turns sum these calls instead.
+        case "assistant.usage": {
+          const nanoAiu = record(data.copilotUsage)?.totalNanoAiu;
+          return context.reportModelCall({
+            sessionId: event.sessionId,
+            mainAgent:
+              event.agentId === undefined && data.interactionType !== "conversation-compaction",
+            ...(typeof data.model === "string" ? { model: data.model } : {}),
+            inputTokens: tokens(data.inputTokens),
+            outputTokens: tokens(data.outputTokens),
+            cachedReadTokens: tokens(data.cacheReadTokens),
+            cachedWriteTokens: tokens(data.cacheWriteTokens),
+            thoughtTokens: tokens(data.reasoningTokens),
+            ...(typeof nanoAiu === "number"
+              ? { cost: { amount: nanoAiu * USD_PER_NANO_AIU, currency: "USD" } }
+              : {}),
+          });
+        }
         case "assistant.message_delta":
         case "assistant.reasoning_delta": {
           if (typeof data.deltaContent !== "string") return Effect.void;

@@ -200,8 +200,26 @@ export interface AcpAdapterV2UserInputRequest {
   readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
 }
 
+export interface AcpAdapterV2ModelCall {
+  readonly sessionId: string;
+  /** False for subagent and compaction calls, which count only toward otherUsage and cost. */
+  readonly mainAgent: boolean;
+  readonly model?: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedReadTokens: number;
+  readonly cachedWriteTokens: number;
+  readonly thoughtTokens: number;
+  readonly cost?: { readonly amount: number; readonly currency: string };
+}
+
 export interface AcpAdapterV2ExtensionContext {
   readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
+  readonly reportModelCall: (call: AcpAdapterV2ModelCall) => Effect.Effect<void>;
+  readonly reportTurnNotice: (notice: {
+    readonly sessionId: string;
+    readonly title: string;
+  }) => Effect.Effect<void>;
   readonly reportProviderRetry: (input: {
     readonly sessionId: string;
     readonly failure: OrchestrationV2ProviderFailure;
@@ -292,6 +310,53 @@ export function acpPerTurnPromptUsage(
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  };
+}
+
+/**
+ * Folds per-call reports (flavors whose extensions call reportModelCall) into one
+ * TurnTokenUsage, for agents whose PromptResponse.usage is not per-turn.
+ */
+function acpModelCallUsage(
+  calls: ReadonlyArray<AcpAdapterV2ModelCall>,
+  hasSubagents: boolean,
+  terminalStatus: OrchestrationV2ProviderTurn["status"],
+): TurnTokenUsage {
+  const main = calls.filter((call) => call.mainAgent);
+  const other = calls.filter((call) => !call.mainAgent);
+  const sum = (
+    selected: ReadonlyArray<AcpAdapterV2ModelCall>,
+    pick: (call: AcpAdapterV2ModelCall) => number,
+  ) => selected.reduce((total, call) => total + pick(call), 0);
+  const inputTokens = sum(main, (call) => call.inputTokens);
+  const outputTokens = sum(main, (call) => call.outputTokens);
+  const models = [...new Set(main.flatMap((call) => call.model ?? []))];
+  const currency = calls.find((call) => call.cost !== undefined)?.cost?.currency;
+  return {
+    ...acpPerTurnPromptUsage(
+      {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cachedReadTokens: sum(main, (call) => call.cachedReadTokens),
+        cachedWriteTokens: sum(main, (call) => call.cachedWriteTokens),
+        thoughtTokens: sum(main, (call) => call.thoughtTokens),
+      },
+      hasSubagents,
+      terminalStatus,
+    ),
+    ...(models.length === 0 ? {} : { models }),
+    ...(other.length === 0
+      ? {}
+      : {
+          otherUsage: {
+            inputTokens: sum(other, (call) => call.inputTokens),
+            outputTokens: sum(other, (call) => call.outputTokens),
+          },
+        }),
+    ...(currency === undefined
+      ? {}
+      : { cost: { amount: sum(calls, (call) => call.cost?.amount ?? 0), currency } }),
   };
 }
 
@@ -1406,6 +1471,7 @@ interface ActiveAcpTurn {
   /** Completed when an update after dispatch matches `cancelAfterPromptStarts.isStart`. */
   readonly promptStarted: Deferred.Deferred<void, never>;
   promptUsage: EffectAcpSchema.Usage | undefined;
+  modelCalls?: Array<AcpAdapterV2ModelCall>;
   backgroundFinalizeGeneration: number;
   /** The agent's own id for this turn's prompt, from `forkFromTurn.nativeTurnId`. */
   nativePromptId: string | undefined;
@@ -6790,6 +6856,36 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (flavor.registerExtensions !== undefined) {
             yield* flavor.registerExtensions({
               runtime: targetRuntime,
+              reportModelCall: (call) =>
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    const context = yield* Ref.get(activeTurn);
+                    if (
+                      context === null ||
+                      context.finalized ||
+                      context.nativeThreadId !== call.sessionId
+                    )
+                      return;
+                    (context.modelCalls ??= []).push(call);
+                  }),
+                ).pipe(Effect.asVoid),
+              reportTurnNotice: (notice) =>
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    const context = yield* Ref.get(activeTurn);
+                    if (
+                      context === null ||
+                      context.finalized ||
+                      context.interrupted ||
+                      context.nativeThreadId !== notice.sessionId ||
+                      (yield* Ref.get(stoppedRunQuarantine))
+                    )
+                      return;
+                    yield* emitNotice(context, { title: notice.title });
+                  }),
+                ).pipe(Effect.asVoid),
               reportProviderRetry: (notice) =>
                 runRuntimeCallbackAtGeneration(handlerGeneration, reportProviderRetry(notice)).pipe(
                   Effect.asVoid,
@@ -7514,12 +7610,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             : {
                 // The prompt tap only captures usage for flavors that declared
                 // per-turn counters, so undeclared agents stay unavailable here.
-                turnTokenUsage: acpPerTurnPromptUsage(
-                  context.promptUsage,
-                  context.subagents.size > 0,
-                  status,
-                  flavor.geminiPromptUsage,
-                ),
+                turnTokenUsage:
+                  context.modelCalls === undefined
+                    ? acpPerTurnPromptUsage(
+                        context.promptUsage,
+                        context.subagents.size > 0,
+                        status,
+                        flavor.geminiPromptUsage,
+                      )
+                    : acpModelCallUsage(context.modelCalls, context.subagents.size > 0, status),
               }),
         });
 

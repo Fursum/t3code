@@ -1,3 +1,4 @@
+import type { OrchestrationV2ProviderTurn, TurnTokenUsage } from "@t3tools/contracts";
 import { useState } from "react";
 import {
   computeStableMessagesTimelineRows,
@@ -32,6 +33,25 @@ export function useStableHandoffRuns(
           modelSelection: run.modelSelection,
         }));
   setState({ source: runs, signature, value });
+  return value;
+}
+
+/** A turn's usage lands once, at its end; live token updates must not re-render every row. */
+export function useStableTurnUsage(
+  providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "id" | "turnTokenUsage">>,
+): ReadonlyMap<string, TurnTokenUsage> {
+  const [state, setState] = useState<{
+    readonly source: unknown;
+    readonly signature: string;
+    readonly value: ReadonlyMap<string, TurnTokenUsage>;
+  }>({ source: null, signature: "", value: new Map() });
+  if (state.source === providerTurns) return state.value;
+  const finished = providerTurns.flatMap((turn) =>
+    turn.turnTokenUsage === undefined ? [] : [[turn.id as string, turn.turnTokenUsage] as const],
+  );
+  const signature = finished.map(([id]) => id).join();
+  const value = signature === state.signature ? state.value : new Map(finished);
+  setState({ source: providerTurns, signature, value });
   return value;
 }
 

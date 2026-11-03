@@ -21,6 +21,7 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
+import { formatContextWindowCost } from "~/lib/contextWindow";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
 
@@ -165,12 +166,18 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const turnId = projectedItem?.item.providerTurnId;
+  const usage = turnId ? ctx.turnUsageById.get(turnId) : undefined;
+  const usageParts = [
+    ...(usage?.models ?? []),
+    ...(usage?.cost ? [formatContextWindowCost(usage.cost)] : []),
+  ];
 
   return (
     <div
       className={cn(
         "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
+        alwaysVisible || usage?.cost
           ? "opacity-100"
           : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
         className,
@@ -199,6 +206,9 @@ function AssistantMessageMeta({
           </TooltipPopup>
         </Tooltip>
       )}
+      {!message.streaming && usageParts.length > 0 ? (
+        <p className="text-muted-foreground text-xs tabular-nums">{usageParts.join(" · ")}</p>
+      ) : null}
     </div>
   );
 }

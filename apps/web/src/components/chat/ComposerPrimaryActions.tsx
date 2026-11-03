@@ -54,6 +54,7 @@ interface ComposerPrimaryActionsProps {
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   compactBeforeSendTokens?: number | null;
+  usageSummary?: string | null;
   keepFullHistory?: boolean;
   onToggleKeepFullHistory?: () => void;
 }
@@ -107,6 +108,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onPreviousPendingQuestion,
   onInterrupt,
   compactBeforeSendTokens = null,
+  usageSummary = null,
   keepFullHistory = false,
   onToggleKeepFullHistory,
 }: ComposerPrimaryActionsProps) {
@@ -306,7 +308,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const submit = (
     <Tooltip key="submit">
       <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
-      <TooltipPopup>{submitTooltip}</TooltipPopup>
+      <TooltipPopup>
+        {submitTooltip}
+        {usageSummary ? (
+          <span className="block whitespace-pre-line text-muted-foreground tabular-nums">
+            {usageSummary}
+          </span>
+        ) : null}
+      </TooltipPopup>
     </Tooltip>
   );
   if (compactTokens === null) {

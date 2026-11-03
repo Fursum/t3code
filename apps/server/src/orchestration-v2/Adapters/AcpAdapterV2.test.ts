@@ -3199,7 +3199,18 @@ describe("AcpAdapterV2", () => {
                         mode,
                       },
                     });
+                  yield* raw("session.auto_mode_resolved", { chosenModel: "gpt-6-luna" });
                   yield* chunk("Launching ");
+                  yield* raw("assistant.usage", {
+                    model: "gpt-6-luna",
+                    interactionType: "conversation-agent",
+                    inputTokens: 13186,
+                    outputTokens: 26,
+                    cacheReadTokens: 8198,
+                    cacheWriteTokens: 4985,
+                    reasoningTokens: 0,
+                    copilotUsage: { totalNanoAiu: 64656450 },
+                  });
                   yield* launch("task-a", "Describe a.txt", "sync");
                   yield* launch("task-b", "Describe b.txt", "sync");
                   yield* launch("task-bg", "List directory", "background");
@@ -3221,6 +3232,17 @@ describe("AcpAdapterV2", () => {
                     rawInput: { path: "a.txt" },
                     _meta: { "github.com/copilot": { agentId: "agent-a" } },
                   });
+                  yield* raw("session.auto_mode_resolved", { chosenModel: "gpt-6-sol" }, "agent-a");
+                  yield* raw(
+                    "assistant.usage",
+                    {
+                      model: "gpt-6-sol",
+                      inputTokens: 100,
+                      outputTokens: 10,
+                      copilotUsage: { totalNanoAiu: 1000000 },
+                    },
+                    "agent-a",
+                  );
                   yield* chunk("`a.txt` says", "task-a");
                   yield* chunk("`b.txt` has", "task-b");
                   yield* chunk(" hello.", "task-a");
@@ -3240,6 +3262,16 @@ describe("AcpAdapterV2", () => {
                   }
                   yield* raw("subagent.completed", { toolCallId: "task-bg" }, "agent-bg");
                   yield* chunk("all done.");
+                  yield* raw("assistant.usage", {
+                    model: "gpt-6-luna",
+                    interactionType: "conversation-agent",
+                    inputTokens: 13239,
+                    outputTokens: 5,
+                    cacheReadTokens: 13183,
+                    cacheWriteTokens: 53,
+                    reasoningTokens: 0,
+                    copilotUsage: { totalNanoAiu: 12712950 },
+                  });
                   return { stopReason: "end_turn" as const };
                 }),
             }),
@@ -3291,6 +3323,32 @@ describe("AcpAdapterV2", () => {
           ),
         );
       assert.deepEqual([...lastText(threadId).values()].join(""), "Launching all done.");
+      assert.deepEqual(
+        items.flatMap((item) => (item.type === "system_notice" ? [item.message] : [])),
+        ["Auto routed to gpt-6-luna"],
+      );
+      const turnUsage = events
+        .flatMap((event) =>
+          event.type === "provider_turn.updated" ? [event.providerTurn.turnTokenUsage] : [],
+        )
+        .at(-1);
+      assert.closeTo(turnUsage?.cost?.amount ?? 0, 78369400 / 1e11, 1e-12);
+      assert.deepEqual(
+        { ...turnUsage, cost: turnUsage?.cost?.currency },
+        {
+          usageScope: "main_agent",
+          usageStatus: "complete",
+          hasSubagents: true,
+          inputTokens: 26425,
+          outputTokens: 31,
+          cachedInputTokens: 21381,
+          cacheCreationTokens: 5038,
+          reasoningTokens: 0,
+          models: ["gpt-6-luna"],
+          otherUsage: { inputTokens: 100, outputTokens: 10 },
+          cost: "USD",
+        },
+      );
       const tasks = new Map(
         events.flatMap((event) =>
           event.type === "subagent.updated"

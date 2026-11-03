@@ -16,6 +16,7 @@ import {
   latestProviderTurnTokenUsage,
   shouldOfferResumeCompaction,
 } from "@t3tools/client-runtime/state/context-window";
+import { threadUsageSummary } from "./contextWindow";
 
 const decodeTokenUsage = Schema.decodeSync(OrchestrationV2ProviderTurnTokenUsage);
 
@@ -47,6 +48,56 @@ describe("V2 context window presentation", () => {
     ]);
     expect(snapshot?.usedTokens).toBe(2_000);
     expect(snapshot?.totalProcessedTokens).toBe(10_000);
+  });
+});
+
+describe("threadUsageSummary", () => {
+  const snapshot = deriveLatestContextWindowSnapshot([], {
+    usedTokens: 41_000,
+    maxTokens: 272_000,
+    updatedAt: "2026-06-20T00:00:00.000Z",
+  });
+  const common = { usageScope: "main_agent", hasSubagents: false } as const;
+
+  it("shows context, then sums every turn's tokens and cost, and skips local commands", () => {
+    const summary = threadUsageSummary(snapshot, [
+      {
+        turnTokenUsage: {
+          ...common,
+          usageStatus: "complete",
+          inputTokens: 1000,
+          outputTokens: 10,
+          otherUsage: { inputTokens: 200, outputTokens: 2 },
+          cost: { amount: 0.0025, currency: "USD" },
+        },
+      },
+      {},
+      { turnTokenUsage: { ...common, usageStatus: "unavailable" } },
+      {
+        turnTokenUsage: {
+          ...common,
+          usageStatus: "complete",
+          inputTokens: 9999,
+          outputTokens: 9999,
+          localCommand: true,
+        },
+      },
+      {
+        turnTokenUsage: {
+          ...common,
+          usageStatus: "complete",
+          inputTokens: 3000,
+          outputTokens: 30,
+          cost: { amount: 0.0015, currency: "USD" },
+        },
+      },
+    ]);
+    expect(summary).toBe("Context 41k / 272k (15%)\nThread 4.2k tokens · USD 0.0040");
+  });
+
+  it("does not invent a total or a zero cost when no turn reported one", () => {
+    expect(threadUsageSummary(snapshot, [{}])).toBe("Context 41k / 272k (15%)");
+    expect(threadUsageSummary(null, [{}])).toBeNull();
   });
 });
 

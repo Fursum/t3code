@@ -27,6 +27,11 @@ export function isToolLifecycleItemType(value: string): value is ToolLifecycleIt
   return TOOL_LIFECYCLE_ITEM_TYPES.includes(value as ToolLifecycleItemType);
 }
 
+const ProviderReportedCost = Schema.Struct({
+  amount: Schema.Number.check(Schema.isFinite()),
+  currency: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(32)),
+});
+
 export const ThreadTokenUsageSnapshot = Schema.Struct({
   usedTokens: NonNegativeInt,
   totalProcessedTokens: Schema.optional(NonNegativeInt),
@@ -44,12 +49,7 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
   autoCompactThreshold: Schema.optional(PositiveInt),
-  cost: Schema.optional(
-    Schema.Struct({
-      amount: Schema.Number.check(Schema.isFinite()),
-      currency: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(32)),
-    }),
-  ),
+  cost: Schema.optional(ProviderReportedCost),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
@@ -68,6 +68,8 @@ const TurnTokenUsageCommonFields = {
   otherUsage: Schema.optional(
     Schema.Struct({ inputTokens: NonNegativeInt, outputTokens: NonNegativeInt }),
   ),
+  // The provider's charge for the whole turn, otherUsage included. Absent means unknown, not free.
+  cost: Schema.optional(ProviderReportedCost),
 };
 export const TurnTokenUsage = Schema.Union([
   Schema.Struct({
